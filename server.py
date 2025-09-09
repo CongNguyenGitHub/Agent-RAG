@@ -1,9 +1,9 @@
 from fastapi import FastAPI, Body, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 import sqlite3
 
 app = FastAPI()
-
 DB_FILE = "demo.db"
 
 # -------------------------------
@@ -12,34 +12,35 @@ DB_FILE = "demo.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS player (
+    CREATE TABLE IF NOT EXISTS players (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        age INTEGER NOT NULL,
-        sport TEXT NOT NULL
+        name TEXT,
+        age INTEGER,
+        sport TEXT
     )
     """)
-
-    # Thêm dữ liệu mẫu nếu bảng rỗng
     cursor.execute("SELECT COUNT(*) FROM player")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO player (name, age, sport) VALUES (?, ?, ?)", ("Alice", 25, "Football"))
         cursor.execute("INSERT INTO player (name, age, sport) VALUES (?, ?, ?)", ("Bob", 30, "Tennis"))
         cursor.execute("INSERT INTO player (name, age, sport) VALUES (?, ?, ?)", ("Charlie", 22, "Basketball"))
-
     conn.commit()
     conn.close()
 
 
 # -------------------------------
-# Pydantic model
+# Pydantic models
 # -------------------------------
 class Player(BaseModel):
     name: str
     age: int
     sport: str
+
+class PlayerUpdate(BaseModel):
+    name: Optional[str] = None
+    age: Optional[int] = None
+    sport: Optional[str] = None
 
 
 # -------------------------------
@@ -76,14 +77,29 @@ def read_players():
 
 
 @app.put("/update_player/{player_id}")
-def update_player(player_id: int, player: Player):
+def update_player(player_id: int, player: PlayerUpdate):
     try:
+        update_fields = []
+        values = []
+        if player.name is not None:
+            update_fields.append("name=?")
+            values.append(player.name)
+        if player.age is not None:
+            update_fields.append("age=?")
+            values.append(player.age)
+        if player.sport is not None:
+            update_fields.append("sport=?")
+            values.append(player.sport)
+
+        if not update_fields:
+            raise HTTPException(status_code=400, detail="No fields provided for update")
+
+        values.append(player_id)
+
+        query = f"UPDATE player SET {', '.join(update_fields)} WHERE id=?"
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE player SET name=?, age=?, sport=? WHERE id=?",
-            (player.name, player.age, player.sport, player_id)
-        )
+        cursor.execute(query, tuple(values))
         conn.commit()
         conn.close()
         return {"status": "ok", "updated_id": player_id}
@@ -104,14 +120,8 @@ def delete_player(player_id: int):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# -------------------------------
-# Tuỳ chọn: Query raw SQL an toàn
-# -------------------------------
 @app.post("/run_query")
 def run_query(query: str = Body(..., embed=True)):
-    """
-    Chỉ dùng cho SELECT. Có try/except để tránh crash.
-    """
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
